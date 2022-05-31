@@ -1,7 +1,10 @@
-# Parameters
-nc: 20  # number of classes
-depth_multiple: 0.33  # model depth multiple
-width_multiple: 0.50  # layer channel multiple
+# 网络模型相关参数设置
+nc: 20  # 数据集类别总数
+depth_multiple: 0.33  # 控制模型的深度（BottleneckCSP个数）
+width_multiple: 0.50  # 控制Conv通道channel个数（卷积核数量）
+# depth_multiple表示BottleneckCSP块的缩放因子，将所有BottleneckCSP模块的Bottleneck乘上该参数得到最终个数。
+# width_multiple表示卷积通道的缩放因子，就是将配置里面的backbone和head部分有关Conv通道的设置，全部乘以该系数。
+# 通过这两个参数就可以实现不同复杂度的模型设计。
 anchors:
   - [10,13, 16,30, 33,23]  # P3/8
   - [30,61, 62,45, 59,119]  # P4/16
@@ -10,6 +13,10 @@ anchors:
 # YOLOv5 v6.0 backbone
 backbone:
   # [from, number, module, args]
+  # from表示当前模块的输入来自那一层的输出，-1表示来自上一层的输出
+  # number表示本模块重复的次数，1表示只有一个，3表示重复3次
+  # module: 模块名
+  # args: [模块输入channel, 模块输出channel, 模块其他参数]
   [[-1, 1, Conv, [64, 6, 2, 2]],  # 0-P1/2
    [-1, 1, Conv, [128, 3, 2]],  # 1-P2/4
    [-1, 3, C3, [128]],
@@ -22,7 +29,7 @@ backbone:
    [-1, 1, SPPF, [1024, 5]],  # 9
   ]
 
-# YOLOv5 v6.0 head
+# YOLOv5 v6.0 head 作者没有区分neck模块，所以head部分包含了PANet+Detect部分
 head:
   [[-1, 1, Conv, [512, 1, 1]],
    [-1, 1, nn.Upsample, [None, 2, 'nearest']],

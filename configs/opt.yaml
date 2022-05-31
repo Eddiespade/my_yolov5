@@ -1,44 +1,22 @@
-# 预训练权重文件路径
-weights: ""
-# 模型配置文件路径
-cfg: "configs/yolov5s.yaml"
-# 数据集配置文件路径
-data: configs/voc.yaml"
-# 训练的超参数配置文件路径
-hyp: "configs/hyp.voc.yaml"
-# 训练轮次
-epochs: 300
-# 训练批量大小
-batch-size: 8
-# 训练图片大小
-imgsz: 640
-# 断点续练
-resume: True
-# 自动调整anchor，默认False
-noautoanchor: False
-# 是否进行超参数进化，默认False
-evolve: False
-# 是否提前缓存图片到内存，以加快训练速度，默认False
-cache: False
-# 训练设备
-device: 0
-# 多尺度训练
-multi-scale: False
-# 数据集是否单类，默认False
-single-cls: False
-# 优化器选择
-optimizer: 'SGD'
-# workers/dataloader的最大worker数量
-workers: 8
-# 保存训练的地址
-project: 'runs/train'
+weights: ""                     # 预训练权重文件路径
+cfg: "configs/yolov5s.yaml"     # 模型配置文件路径
+data: configs/voc.yaml"         # 数据集配置文件路径
+hyp: "configs/hyp.voc.yaml"     # 训练的超参数配置文件路径
+epochs: 300                     # 训练轮次
+batch-size: 8                   # 训练批量大小
+imgsz: 640                      # 训练图片大小
+resume: True                    # 断点续练
+noautoanchor: False             # 自动调整anchor，默认False
+evolve: False                   # 是否进行超参数进化，默认False
+cache: False                    # 是否提前缓存图片到内存，以加快训练速度，默认False
+device: 0                       # 训练设备
+multi-scale: False              # 多尺度训练
+single-cls: False               # 数据集是否单类，默认False
+optimizer: 'SGD'                # 优化器选择
+workers: 8                      # workers/dataloader的最大worker数量
+project: 'runs/train'           # 保存训练的地址
 name: 'exp'
-# 余弦学习率
-cos-lr: False
-# 标签平滑
-label-smoothing: 0.0
-# 早停止忍耐次数 / 100次不更新就停止训练
-patience: 100
-# 冻结训练
-freeze: False
-
+cos-lr: False                   # 余弦学习率
+label-smoothing: 0.0            # 标签平滑
+patience: 100                   # 早停止忍耐次数 / 100次不更新就停止训练
+freeze: False                   # 冻结训练
