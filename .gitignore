@@ -1,0 +1,4 @@
+datasets/VOC/images
+datasets/VOC/labels
+weights/*.pt
+runs/
