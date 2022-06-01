@@ -304,4 +304,35 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
 
 if __name__ == '__main__':
-    pass
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cfg', type=str, default='yolov5s.yaml', help='model.yaml')
+    parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--profile', action='store_true', help='profile model speed')
+    parser.add_argument('--line-profile', action='store_true', help='profile model speed layer by layer')
+    parser.add_argument('--test', action='store_true', help='test all yolo*.yaml')
+    opt = parser.parse_args()
+    opt.cfg = check_yaml(opt.cfg)  # check YAML
+    print_args(vars(opt))
+    device = select_device(opt.device)
+
+    # Create model
+    im = torch.rand(opt.batch_size, 3, 640, 640).to(device)
+    model = Model(opt.cfg).to(device)
+
+    # Options
+    if opt.line_profile:  # profile layer by layer
+        _ = model(im, profile=True)
+
+    elif opt.profile:  # profile forward-backward
+        results = profile(input=im, ops=[model], n=3)
+
+    elif opt.test:  # test all models
+        for cfg in Path(ROOT / 'models').rglob('yolo*.yaml'):
+            try:
+                _ = Model(cfg)
+            except Exception as e:
+                print(f'Error in {cfg}: {e}')
+
+    else:  # report fused model summary
+        model.fuse()
