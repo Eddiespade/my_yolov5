@@ -91,29 +91,40 @@ class Detect(nn.Module):
 
 class Model(nn.Module):
     # YOLOv5 model
-    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):
+        """
+        :params cfg:模型配置文件
+        :params ch: 输入通道。一般是3 RGB文件
+        :params nc: 数据集的类别个数
+        :anchors: 一般是None
+        """
         super().__init__()
-        if isinstance(cfg, dict):
+        if isinstance(cfg, dict):   # 当cfg直接是字典时
             self.yaml = cfg  # model dict
-        else:  # is *.yaml
-            import yaml  # for torch hub
-            self.yaml_file = Path(cfg).name
+        else:  # 当cfg为 *.yaml 时
+            import yaml
+            self.yaml_file = Path(cfg).name     # 提取文件名 yolov5s.yaml
             with open(cfg, encoding='ascii', errors='ignore') as f:
-                self.yaml = yaml.safe_load(f)  # model dict
+                self.yaml = yaml.safe_load(f)  # 取到配置文件中每条的信息（没有注释内容）
 
-        # Define model
-        ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
+        # 输入通道；如果 cfg文件中定义了 ch参数，则使用cfg文件中的参数。否则使用传入的参数；
+        ch = self.yaml['ch'] = self.yaml.get('ch', ch)
+        # 设置类别数 一般不执行, 因为nc=self.yaml['nc']恒成立
         if nc and nc != self.yaml['nc']:
-            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml['nc'] = nc  # override yaml value
+            self.yaml['nc'] = nc
+        # 重写anchor
         if anchors:
-            LOGGER.info(f'Overriding model.yaml anchors with anchors={anchors}')
-            self.yaml['anchors'] = round(anchors)  # override yaml value
+            self.yaml['anchors'] = round(anchors)  # round() 四舍五入
+        # 创建网络模型
+        # self.model: 初始化的整个网络模型(包括Detect层结构)
+        # self.save: 所有层结构中from不等于-1的序号，并排好序  [4, 6, 10, 14, 17, 20, 23]
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+        # 默认类别名 ['0', '1', '2',..., '19']
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
+        # 默认True，不使用加速推理
         self.inplace = self.yaml.get('inplace', True)
 
-        # Build strides, anchors
+        # 获取Detect模块的stride(相对输入图像的下采样率)和anchors在当前Detect输出的feature map的尺度
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
             s = 256  # 2x min stride
@@ -124,7 +135,7 @@ class Model(nn.Module):
             self.stride = m.stride
             self._initialize_biases()  # only run once
 
-        # Init weights, biases
+        # 初始化
         initialize_weights(self)
         self.info()
         LOGGER.info('')
