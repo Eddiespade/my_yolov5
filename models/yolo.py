@@ -120,7 +120,7 @@ class Model(nn.Module):
         # self.save: 所有层结构中from不等于-1的序号，并排好序  [4, 6, 10, 14, 17, 20, 23]
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
         # 默认类别名 ['0', '1', '2',..., '19']
-        self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
+        self.names = [str(i) for i in range(self.yaml['nc'])]
         # 默认True，不使用加速推理
         self.inplace = self.yaml.get('inplace', True)
 
@@ -129,20 +129,24 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
+            # 计算三个feature map下采样的倍率  [8, 16, 32]
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+            # 检查anchor顺序与stride顺序是否一致
             check_anchor_order(m)  # must be in pixel-space (not grid-space)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            # 调用解耦头这里要注释掉
+            self._initialize_biases()  # 初始化偏置
 
-        # 初始化
-        initialize_weights(self)
-        self.info()
+        initialize_weights(self)    # 初始化参数
+        self.info()                 # 打印模型信息
         LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
+        # 是否在测试时也使用数据增强  Test Time Augmentation(TTA)
         if augment:
-            return self._forward_augment(x)  # augmented inference, None
+            return self._forward_augment(x)  # augmented inference, None 上下flip/左右flip
+        # 默认执行 正常前向推理
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_augment(self, x):
@@ -245,7 +249,7 @@ class Model(nn.Module):
         self.info()
         return self
 
-    def info(self, verbose=False, img_size=640):  # print model information
+    def info(self, verbose=False, img_size=640):  # 打印模型信息
         model_info(self, verbose, img_size)
 
     def _apply(self, fn):
@@ -261,56 +265,99 @@ class Model(nn.Module):
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
+    """用在上面Model模块中
+    解析模型文件(字典形式)，并搭建网络结构
+    这个函数其实主要做的就是: 更新当前层的args（参数）,计算c2（当前层的输出channel） =>
+                          使用当前层的参数搭建当前层 =>
+                          生成 layers + save
+    :params d: model_dict 模型文件 字典形式 {dict:7}  yolov5s.yaml中的6个元素 + ch
+    :params ch: 记录模型每一层的输出channel 初始ch=[3] 后面会删除
+    :return nn.Sequential(*layers): 网络的每一层的层结构
+    :return sorted(save): 把所有层结构中from不是-1的值记下 并排序 [4, 6, 10, 14, 17, 20, 23]
+    """
     LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
+    # 读取d字典中的anchors和parameters(nc、depth_multiple、width_multiple)
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
+    # na: number of anchors 每一个predict head上的anchor数 = 3
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
+    # no: number of outputs 每一个predict head层的输出channel = anchors * (classes + 5) = 75(VOC)
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
+    """
+    开始搭建网络
+    layers: 保存每一层的层结构
+    save: 记录下所有层结构中from中不是-1的层结构序号
+    c2: 保存当前层的输出channel
+    """
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+    # from(当前层输入来自哪些层), number(当前层次数 初定), module(当前层类别), args(当前层类参数 初定)
     for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
+        # eval(string) 得到当前层的真实类名 例如: m= Focus -> <class 'models.common.Focus'>
         m = eval(m) if isinstance(m, str) else m  # eval strings
+
+        # 没什么用
         for j, a in enumerate(args):
             try:
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
             except NameError:
                 pass
 
+        # ------------------- 更新当前层的args（参数）,计算c2（当前层的输出channel） -------------------
+        # depth gain 控制深度  如v5s: n*0.33   n: 当前模块的次数(间接控制深度)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
+            # c1: 当前层的输入的channel数  c2: 当前层的输出的channel数(初定)  ch: 记录着所有层的输出channel
             c1, c2 = ch[f], args[0]
+            # if not output  no=75  只有最后一层c2=no  最后一层不用控制宽度，输出channel必须是no
             if c2 != no:  # if not output
+                # width gain 控制宽度  如v5s: c2*0.5  c2: 当前层的最终输出的channel数(间接控制宽度)
                 c2 = make_divisible(c2 * gw, 8)
 
+            # 在初始arg的基础上更新 加入当前层的输入channel并更新当前层
+            # [in_channel, out_channel, *args[1:]]
             args = [c1, c2, *args[1:]]
+            # 如果当前层是BottleneckCSP/C3/C3TR, 则需要在args中加入bottleneck的个数
+            # [in_channel, out_channel, Bottleneck的个数n, bool(True表示有shortcut 默认，反之无)]
             if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3x]:
-                args.insert(2, n)  # number of repeats
-                n = 1
+                args.insert(2, n)   # 在第二个位置插入bottleneck个数n
+                n = 1               # 恢复默认值1
         elif m is nn.BatchNorm2d:
+            # BN层只需要返回上一层的输出channel
             args = [ch[f]]
         elif m is Concat:
+            # Concat层则将f中所有的输出累加得到这层的输出channel
             c2 = sum(ch[x] for x in f)
         elif m is Detect:
+            # 在args中加入三个Detect层的输出channel
             args.append([ch[x] for x in f])
-            if isinstance(args[1], int):  # number of anchors
+            if isinstance(args[1], int):  # number of anchors 几乎不执行
                 args[1] = [list(range(args[1] * 2))] * len(f)
-        elif m is Contract:
+        elif m is Contract:     # 不怎么用
             c2 = ch[f] * args[0] ** 2
-        elif m is Expand:
+        elif m is Expand:       # 不怎么用
             c2 = ch[f] // args[0] ** 2
         else:
+            # Upsample args 不变
             c2 = ch[f]
 
+        # m_: 得到当前层module  如果n>1就创建多个m(当前层结构), 如果n=1就创建一个m
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+
+        # 打印当前层结构的一些基本信息
         t = str(m)[8:-2].replace('__main__.', '')  # module type
-        np = sum(x.numel() for x in m_.parameters())  # number params
+        np = sum(x.numel() for x in m_.parameters())  # number params       计算这一层的参数量
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
         LOGGER.info(f'{i:>3}{str(f):>18}{n_:>3}{np:10.0f}  {t:<40}{str(args):<30}')  # print
+
+        # append to savelist  把所有层结构中from不是-1的值记下  [6, 4, 14, 10, 17, 20, 23]
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+
+        # 将当前层结构module加入layers中
         layers.append(m_)
         if i == 0:
-            ch = []
-        ch.append(c2)
+            ch = []     # 去除输入channel [3]
+        ch.append(c2)   # 把当前层的输出channel数加入ch
     return nn.Sequential(*layers), sorted(save)
 
 
