@@ -16,7 +16,7 @@ fl_gamma: 0.0             # focal loss gamma (efficientDet default gamma=1.5)
 # 3、其他几个参数
 iou_t: 0.2                # 训练时IoU阈值
 anchor_t: 3.3744          #  anchor的长宽比阈值（长:宽 = 4:1） 用于k-means中计算 bpr和aat
-anchors: 3.412            # 每个输出层的anchors数量 (0 to ignore)
+# anchors: 3.412            # 每个输出层的anchors数量 (0 to ignore)
 # 4、数据增强相关参数
 hsv_h: 0.01041            # hsv增强系数 色调
 hsv_s: 0.54703            # hsv增强系数 饱和度

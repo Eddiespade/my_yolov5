@@ -279,9 +279,9 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
     # 读取d字典中的anchors和parameters(nc、depth_multiple、width_multiple)
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
     # na: number of anchors 每一个predict head上的anchor数 = 3
-    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
+    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors
     # no: number of outputs 每一个predict head层的输出channel = anchors * (classes + 5) = 75(VOC)
-    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    no = na * (nc + 5)
 
     """
     开始搭建网络
