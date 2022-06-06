@@ -295,7 +295,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         # eval(string) 得到当前层的真实类名 例如: m= Focus -> <class 'models.common.Focus'>
         m = eval(m) if isinstance(m, str) else m  # eval strings
 
-        # 没什么用
+        # 同上，但没什么用
         for j, a in enumerate(args):
             try:
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
@@ -305,6 +305,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         # ------------------- 更新当前层的args（参数）,计算c2（当前层的输出channel） -------------------
         # depth gain 控制深度  如v5s: n*0.33   n: 当前模块的次数(间接控制深度)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
+
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, C3x):
             # c1: 当前层的输入的channel数  c2: 当前层的输出的channel数(初定)  ch: 记录着所有层的输出channel
