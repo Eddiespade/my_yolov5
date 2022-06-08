@@ -238,6 +238,7 @@ def model_info(model, verbose=False, img_size=640):
 
 
 def scale_img(img, ratio=1.0, same_shape=False, gs=32):  # img(16,3,256,416)
+    """ 要用到 在 model 的 _forward_augment 里面"""
     # Scales img(bs,3,y,x) by ratio constrained to gs-multiple
     if ratio == 1.0:
         return img

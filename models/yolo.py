@@ -1,11 +1,3 @@
-# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
-"""
-YOLO-specific modules
-
-Usage:
-    $ python path/to/models/yolo.py --cfg yolov5s.yaml
-"""
-
 import argparse
 import os
 import platform
@@ -35,35 +27,63 @@ except ImportError:
 
 
 class Detect(nn.Module):
+    """Detect模块是用来构建Detect层的，将输入feature map 通过一个卷积操作和公式计算到我们想要的shape, 为后面的计算损失或者NMS作准备"""
     stride = None  # strides computed during build
-    onnx_dynamic = False  # ONNX export parameter
+    onnx_dynamic = False  # ONNX export parameter；在export中这个参数会重新设为True
     export = False  # export mode
 
     def __init__(self, nc=80, anchors=(), ch=(), inplace=True):  # detection layer
+        """
+        detection layer 相当于yolov3中的YOLOLayer层
+        nc:         number of classes
+        anchors:    传入3个feature map上的所有anchor的大小（P3、P4、P5）
+        ch:         [128, 256, 512] 3个输出feature map的channel
+        """
         super().__init__()
-        self.nc = nc  # number of classes
-        self.no = nc + 5  # number of outputs per anchor
-        self.nl = len(anchors)  # number of detection layers
-        self.na = len(anchors[0]) // 2  # number of anchors
-        self.grid = [torch.zeros(1)] * self.nl  # init grid
-        self.anchor_grid = [torch.zeros(1)] * self.nl  # init anchor grid
-        self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
+        self.nc = nc            # 数据集的类别数量
+        self.no = nc + 5        # 每一个anchor的预测输出数量 如：VOC: 5+20=25  xywhc+20classes
+        self.nl = len(anchors)  # 检测头的数量
+        self.na = len(anchors[0]) // 2                  # 每个feature map的anchor个数 3
+        self.grid = [torch.zeros(1)] * self.nl          # 初始化网格 {list: 3}  tensor([0.]) X 3
+        self.anchor_grid = [torch.zeros(1)] * self.nl   # 初始化锚框
+        # register_buffer，shape(nl,na,2)
+        # 第二个参数： [3, 3, 2]  anchors以[w, h]对的形式存储  3个feature map 每个feature map上有三个anchor（w,h）
+        # 模型中需要保存的参数一般有两种：一种是反向传播需要被optimizer更新的，称为parameter;
+        # 另一种不要被更新称为buffer； buffer的参数更新是在forward中，而optim.step只能更新nn.parameter类型的参数
+        self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))
+        # output conv 对每个输出的feature map都要调用一次conv1x1
         self.m = nn.ModuleList(nn.Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
+        # 一般都是True 默认不使用AWS Inferentia加速
         self.inplace = inplace  # use in-place ops (e.g. slice assignment)
 
     def forward(self, x):
+        """
+        :return
+        1. train: 一个tensor list 存放三个元素   [bs, anchor_num, grid_w, grid_h, xywh+c+20classes]
+                       分别是 [1, 3, 80, 80, 25] [1, 3, 40, 40, 25] [1, 3, 20, 20, 25]
+
+        2. inference: 0 [1, 19200+4800+1200, 25] = [bs, anchor_num*grid_w*grid_h, xywh+c+20classes]
+                      1 一个tensor list 存放三个元素 [bs, anchor_num, grid_w, grid_h, xywh+c+20classes]
+                             [1, 3, 80, 80, 25] [1, 3, 40, 40, 25] [1, 3, 20, 20, 25]
+        """
         z = []  # inference output
+        # 对三个feature map分别进行处理
         for i in range(self.nl):
             x[i] = self.m[i](x[i])  # conv
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
             x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
             if not self.training:  # inference
+                # 构造网格
+                # 因为推理返回的不是归一化后的网格偏移量 需要再加上网格的位置 得到最终的推理坐标 再送入nms
+                # 所以这里构建网格就是为了记录每个grid的网格坐标 方面后面使用
                 if self.onnx_dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
 
                 y = x[i].sigmoid()
                 if self.inplace:
+                    # 默认执行 不使用AWS Inferentia
+                    # 这里的公式和yolov3、v4中使用的不一样 是yolov5作者自己用的 效果更好
                     y[..., 0:2] = (y[..., 0:2] * 2 + self.grid[i]) * self.stride[i]  # xy
                     y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 else:  # for YOLOv5 on AWS Inferentia https://github.com/ultralytics/yolov5/pull/2953
@@ -71,11 +91,13 @@ class Detect(nn.Module):
                     xy = (xy * 2 + self.grid[i]) * self.stride[i]  # xy
                     wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
                     y = torch.cat((xy, wh, conf), 4)
+                # z是一个tensor list 三个元素 分别是[1, 19200, 25] [1, 4800, 25] [1, 1200, 25]
                 z.append(y.view(bs, -1, self.no))
 
         return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
 
     def _make_grid(self, nx=20, ny=20, i=0):
+        """ 构造网格 """
         d = self.anchors[i].device
         t = self.anchors[i].dtype
         shape = 1, self.na, ny, nx, 2  # grid shape
@@ -93,10 +115,10 @@ class Model(nn.Module):
     # YOLOv5 model
     def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):
         """
-        :params cfg:模型配置文件
-        :params ch: 输入通道。一般是3 RGB文件
-        :params nc: 数据集的类别个数
-        :anchors: 一般是None
+        cfg:        模型配置文件
+        ch:         输入通道。一般是3 RGB文件
+        nc:         数据集的类别个数
+        anchors:    一般是None
         """
         super().__init__()
         if isinstance(cfg, dict):   # 当cfg直接是字典时
@@ -140,7 +162,6 @@ class Model(nn.Module):
 
         initialize_weights(self)    # 初始化参数
         self.info()                 # 打印模型信息
-        LOGGER.info('')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         # 是否在测试时也使用数据增强  Test Time Augmentation(TTA)
@@ -150,24 +171,46 @@ class Model(nn.Module):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_augment(self, x):
-        img_size = x.shape[-2:]  # height, width
-        s = [1, 0.83, 0.67]  # scales
-        f = [None, 3, None]  # flips (2-ud, 3-lr)
-        y = []  # outputs
+        """ TTA Test Time Augmentation """
+        img_size = x.shape[-2:]     # height, width
+        s = [1, 0.83, 0.67]         # scales
+        f = [None, 3, None]         # flips (2-ud, 3-lr)
+        y = []                      # outputs
         for si, fi in zip(s, f):
+            # scale_img缩放图片尺寸
             xi = scale_img(x.flip(fi) if fi else x, si, gs=int(self.stride.max()))
             yi = self._forward_once(xi)[0]  # forward
             # cv2.imwrite(f'img_{si}.jpg', 255 * xi[0].cpu().numpy().transpose((1, 2, 0))[:, :, ::-1])  # save
+            # _descale_pred 将推理结果恢复到相对原图图片尺寸
             yi = self._descale_pred(yi, fi, si, img_size)
             y.append(yi)
         y = self._clip_augmented(y)  # clip augmented tails
         return torch.cat(y, 1), None  # augmented inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
+        """
+        x:              输入图像
+        profile:        True 可以做一些性能评估
+        feature_vis:    True 可以做一些特征可视化
+        :return
+        train: 一个tensor list 存放三个元素   [bs, anchor_num, grid_w, grid_h, xywh+c+20classes]
+                       分别是 [1, 3, 80, 80, 25] [1, 3, 40, 40, 25] [1, 3, 20, 20, 25]
+        inference: 0 [1, 19200+4800+1200, 25] = [bs, anchor_num*grid_w*grid_h, xywh+c+20classes]
+                   1 一个tensor list 存放三个元素 [bs, anchor_num, grid_w, grid_h, xywh+c+20classes]
+                             [1, 3, 80, 80, 25] [1, 3, 40, 40, 25] [1, 3, 20, 20, 25]
+        """
+        # y: 存放着self.save=True的每一层的输出，因为后面的层结构concat等操作要用到
+        # dt: 在profile中做性能评估时使用
         y, dt = [], []  # outputs
         for m in self.model:
-            if m.f != -1:  # if not from previous layer
+            # 前向推理每一层结构   m.i=index   m.f=from   m.type=类名   m.np=number of params
+            # if not from previous layer   m.f=当前层的输入来自哪一层的输出  s的m.f都是-1
+            if m.f != -1:  # 如果from != -1;
+                # 这里需要做4个concat操作和1个Detect操作
+                # concat操作如m.f=[-1, 6] x就有两个元素,一个是上一层的输出,另一个是index=6的层的输出 再送到x=m(x)做concat操作
+                # Detect操作m.f=[17, 20, 23] x有三个元素,分别存放第17层第20层第23层的输出 再送到x=m(x)做Detect的forward
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
+            # 打印日志信息  FLOPs time等
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
@@ -177,8 +220,12 @@ class Model(nn.Module):
         return x
 
     def _descale_pred(self, p, flips, scale, img_size):
-        # de-scale predictions following augmented inference (inverse operation)
-        if self.inplace:
+        """
+        将推理结果恢复到原图图片尺寸预测  Test Time Augmentation(TTA)中用到
+        增强推理后的去尺度预测（逆运算）
+        """
+        # 不同的方式前向推理使用公式不同 具体可看Detect函数
+        if self.inplace:        # 默认执行 不使用AWS Inferentia
             p[..., :4] /= scale  # de-scale
             if flips == 2:
                 p[..., 1] = img_size[0] - p[..., 1]  # de-flip ud
@@ -195,7 +242,7 @@ class Model(nn.Module):
 
     def _clip_augmented(self, y):
         # Clip YOLOv5 augmented inference tails
-        nl = self.model[-1].nl  # number of detection layers (P3-P5)
+        nl = self.model[-1].nl  # 检测层的数量 (P3-P5)
         g = sum(4 ** x for x in range(nl))  # grid points
         e = 1  # exclude layer count
         i = (y[0].shape[1] // g) * sum(4 ** x for x in range(e))  # indices
@@ -217,8 +264,12 @@ class Model(nn.Module):
         if c:
             LOGGER.info(f"{sum(dt):10.2f} {'-':>10s} {'-':>10s}  Total")
 
-    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
-        # https://arxiv.org/abs/1708.02002 section 3.3
+    def _initialize_biases(self, cf=None):
+        """
+        用在上面的__init__函数上
+        初始化Detect()中的偏差，cf 是类频率（class frequency）
+        https://arxiv.org/abs/1708.02002 section 3.3
+        """
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module
         for mi, s in zip(m.m, m.stride):  # from
@@ -265,15 +316,16 @@ class Model(nn.Module):
 
 
 def parse_model(d, ch):  # model_dict, input_channels(3)
-    """用在上面Model模块中
+    """
+    用在上面Model模块中
     解析模型文件(字典形式)，并搭建网络结构
     这个函数其实主要做的就是: 更新当前层的args（参数）,计算c2（当前层的输出channel） =>
                           使用当前层的参数搭建当前层 =>
                           生成 layers + save
-    :params d: model_dict 模型文件 字典形式 {dict:7}  yolov5s.yaml中的6个元素 + ch
-    :params ch: 记录模型每一层的输出channel 初始ch=[3] 后面会删除
+    :params d:      model_dict 模型文件 字典形式 {dict:7}  yolov5s.yaml中的6个元素 + ch
+    :params ch:     记录模型每一层的输出channel 初始ch=[3] 后面会删除
     :return nn.Sequential(*layers): 网络的每一层的层结构
-    :return sorted(save): 把所有层结构中from不是-1的值记下 并排序 [4, 6, 10, 14, 17, 20, 23]
+    :return sorted(save):           把所有层结构中from不是-1的值记下 并排序 [4, 6, 10, 14, 17, 20, 23]
     """
     LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     # 读取d字典中的anchors和parameters(nc、depth_multiple、width_multiple)
